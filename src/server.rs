@@ -1,0 +1,116 @@
+use crate::client::ClientRequest;
+use crate::raft::{AppendEntriesRPC, RaftResponse, RequestForVoteRPC, TermId};
+use futures::StreamExt;
+/// Inbound
+/// 每个服务器入站的消息
+/// RequestHandler
+use std::net::SocketAddr;
+use tarpc::context::Context;
+use tarpc::server::{BaseChannel, Channel};
+use tarpc::tokio_serde::formats::Json;
+use tokio::sync::{mpsc, oneshot};
+
+#[tarpc::service]
+pub trait ClientService {
+    // TODO
+    async fn send_command(request: ClientRequest);
+}
+
+pub enum InboundRPCs {
+    AppendEntries(AppendEntriesRPC, oneshot::Sender<RaftResponse>),
+    RequestForVote(RequestForVoteRPC, oneshot::Sender<RaftResponse>),
+    AppendEntriesResponse(RaftResponse),
+    RequestForVoteResponse(RaftResponse),
+    ClientRequest(ClientRequest),
+}
+
+#[derive(Clone)]
+pub struct RequestHandler {
+    tx: mpsc::Sender<InboundRPCs>,
+}
+
+impl ClientService for RequestHandler {
+    async fn send_command(self, _context: Context, request: ClientRequest) {
+        self.tx.send(InboundRPCs::ClientRequest(request)).await;
+    }
+}
+
+#[tarpc::service]
+pub trait RaftService {
+    // TODO
+    async fn append_entries(rpc: AppendEntriesRPC) -> (TermId, bool);
+    async fn request_for_vote(rpc: RequestForVoteRPC) -> (TermId, bool);
+}
+
+impl RaftService for RequestHandler {
+    async fn append_entries(
+        self,
+        _context: tarpc::context::Context,
+        rpc: AppendEntriesRPC,
+    ) -> (TermId, bool) {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.tx
+            .send(InboundRPCs::AppendEntries(rpc, reply_tx))
+            .await;
+        // SAFETY: not safe
+        reply_rx.await.unwrap()
+    }
+    async fn request_for_vote(
+        self,
+        _context: tarpc::context::Context,
+        rpc: RequestForVoteRPC,
+    ) -> (TermId, bool) {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.tx
+            .send(InboundRPCs::RequestForVote(rpc, reply_tx))
+            .await;
+        // SAFETY: not safe
+        reply_rx.await.unwrap()
+    }
+}
+
+impl RequestHandler {
+    pub fn new(tx: mpsc::Sender<InboundRPCs>) -> Self {
+        Self { tx }
+    }
+
+    pub async fn start_listen_peer(&self, nodes: Vec<SocketAddr>) -> std::io::Result<()> {
+        for addr in nodes {
+            let listener = tarpc::serde_transport::tcp::listen(addr, Json::default).await?;
+
+            listener
+                .filter_map(|r| async { r.ok() })
+                .map(BaseChannel::with_defaults)
+                .for_each(|channel| async move {
+                    let this = self.clone();
+                    tokio::spawn(channel.execute(RaftService::serve(this)).for_each(
+                        |call| async {
+                            tokio::spawn(call);
+                        },
+                    ));
+                })
+                .await;
+        }
+        Ok(())
+    }
+
+    pub async fn start_listen_client(&self, client_addr: SocketAddr) -> std::io::Result<()> {
+        let listener = tarpc::serde_transport::tcp::listen(client_addr, Json::default).await?;
+
+        listener
+            .filter_map(|r| async { r.ok() })
+            .map(BaseChannel::with_defaults)
+            .for_each(|channel| async move {
+                let this = self.clone();
+                tokio::spawn(
+                    channel
+                        .execute(ClientService::serve(this))
+                        .for_each(|call| async {
+                            tokio::spawn(call);
+                        }),
+                );
+            })
+            .await;
+        Ok(())
+    }
+}
