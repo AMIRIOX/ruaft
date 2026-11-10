@@ -1,5 +1,5 @@
 use crate::client::ClientRequest;
-use crate::raft::{AppendEntriesRPC, RaftResponse, RequestForVoteRPC, TermId};
+use crate::raft::{AppendEntriesRPC, NodeId, RaftResponse, RequestForVoteRPC, TermId};
 use futures::StreamExt;
 /// Inbound
 /// 每个服务器入站的消息
@@ -19,8 +19,8 @@ pub trait ClientService {
 pub enum InboundRPCs {
     AppendEntries(AppendEntriesRPC, oneshot::Sender<RaftResponse>),
     RequestForVote(RequestForVoteRPC, oneshot::Sender<RaftResponse>),
-    AppendEntriesResponse(RaftResponse),
-    RequestForVoteResponse(RaftResponse),
+    AppendEntriesResponse(RaftResponse, NodeId),
+    RequestForVoteResponse(RaftResponse, NodeId),
     ClientRequest(ClientRequest),
 }
 

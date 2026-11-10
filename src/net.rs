@@ -6,10 +6,11 @@ use crate::{
 /// 每个服务器出站的消息
 /// n * (n - 1) 的消息拓扑, 对每个出站目标是一个 mpsc::Sender
 /// link task 里的 clients
-use std::{collections::HashMap, net::SocketAddr};
+use std::{collections::HashMap, net::SocketAddr, time::Duration};
 use tarpc::{client, context, tokio_serde::formats::Json};
 use tokio::sync::{mpsc, oneshot};
 
+const RECONNECT_BACKOFF: Duration = Duration::from_millis(200);
 enum OutboundRPCs {
     AppendEntries(AppendEntriesRPC),
     RequestForVote(RequestForVoteRPC),
@@ -19,61 +20,67 @@ pub struct Net {
 }
 
 impl Net {
-    pub fn new(self_id: NodeId, quoram: usize) -> Self {
+    pub fn new(
+        self_id: NodeId,
+        nodes: Vec<(NodeId, SocketAddr)>,
+        inbox_tx: mpsc::Sender<InboundRPCs>,
+    ) -> Self {
         let mut links = HashMap::new();
-        for id in 1..=quoram as NodeId {
+        for (id, addr) in nodes {
             if id == self_id {
                 continue;
             }
 
             let (tx, rx) = mpsc::channel(8); // TODO
-            links.insert(id, tx.clone());
-            link(, rx, addr);
+            links.insert(id, tx);
+            tokio::spawn(link(inbox_tx.clone(), rx, addr, id));
         }
         Self { senders: links }
     }
-}
-async fn link(
-    mut inbox_tx: mpsc::Sender<InboundRPCs>,
-    mut rx: mpsc::Receiver<OutboundRPCs>,
-    nodes: Vec<SocketAddr>,
-) {
-    let mut clients = Vec::new();
-    for addr in nodes {
-        let connect = tarpc::serde_transport::tcp::connect(addr, Json::default).await;
-        if let Ok(connect) = connect {
-            let client = RaftServiceClient::new(client::Config::default(), connect).spawn();
-            clients.push(client);
+    pub fn send_rpc(&self, dest_peer: NodeId, rpc: OutboundRPCs) {
+        if let Some(tx) = self.senders.get(&dest_peer) {
+            // TODO
+            todo!();
         }
     }
-    while let Some(rpc) = rx.recv().await {
-        match rpc {
-            OutboundRPCs::AppendEntries(rpc) => {
-                for client in clients.iter() {
-                    let result = client.append_entries(context::current(), rpc.clone()).await;
-                    if let Ok(result) = result {
-                        inbox_tx
-                            .send(InboundRPCs::AppendEntriesResponse(result))
-                            .await;
-                    } else {
-                        todo!();
+}
+async fn link(
+    inbox_tx: mpsc::Sender<InboundRPCs>,
+    mut rx: mpsc::Receiver<OutboundRPCs>,
+    addr: SocketAddr,
+    dest_peer: NodeId,
+) {
+    loop {
+        if let Ok(connect) = tarpc::serde_transport::tcp::connect(addr, Json::default).await {
+            let client = RaftServiceClient::new(client::Config::default(), connect).spawn();
+            while let Some(rpc) = rx.recv().await {
+                match rpc {
+                    OutboundRPCs::AppendEntries(rpc) => {
+                        let result = client.append_entries(context::current(), rpc).await;
+                        if let Ok(result) = result {
+                            inbox_tx
+                                .send(InboundRPCs::AppendEntriesResponse(result, dest_peer))
+                                .await;
+                        } else {
+                            break;
+                        }
                     }
-                }
-            }
-            OutboundRPCs::RequestForVote(rpc) => {
-                for client in clients.iter() {
-                    let result = client
-                        .request_for_vote(context::current(), rpc.clone())
-                        .await;
-                    if let Ok(result) = result {
-                        inbox_tx
-                            .send(InboundRPCs::RequestForVoteResponse(result))
-                            .await;
-                    } else {
-                        todo!();
+                    OutboundRPCs::RequestForVote(rpc) => {
+                        let result = client.request_for_vote(context::current(), rpc).await;
+                        if let Ok(result) = result {
+                            inbox_tx
+                                .send(InboundRPCs::RequestForVoteResponse(result, dest_peer))
+                                .await;
+                        } else {
+                            break;
+                        }
                     }
                 }
             }
         }
+        if rx.is_closed() {
+            return;
+        }
+        tokio::time::sleep(RECONNECT_BACKOFF).await;
     }
 }

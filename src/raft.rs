@@ -1,9 +1,11 @@
-use tokio::sync::mpsc;
-use serde::{Deserialize, Serialize};
-use crate::client::ClientRequest;
+use std::net::SocketAddr;
+
 use crate::log::LogEntries;
 use crate::net::Net;
 use crate::server::RequestHandler;
+use crate::{client::ClientRequest, server::InboundRPCs};
+use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 
 pub type NodeId = u64;
 pub type TermId = u64;
@@ -31,6 +33,7 @@ pub type RaftResponse = (TermId, bool);
 
 struct SharedState {
     // Persistent
+    id: NodeId, // out of paper, but necessary
     current_term: TermId,
     voted_for: Option<NodeId>,
     log: LogEntries,
@@ -41,17 +44,18 @@ struct SharedState {
 pub struct Raft {
     shared: SharedState,
     role: Role,
+    inbox: mpsc::Receiver<InboundRPCs>,
     inbound: RequestHandler,
     outbound: Net,
     quoram: usize,
-    members: &'static Vec<Raft>,
 }
 
 impl Raft {
-    fn new(members: &'static Vec<Self>) -> Self {
+    fn new(id: NodeId, nodes: Vec<(NodeId, SocketAddr)>) -> Self {
         let (tx, rx) = mpsc::channel(8); // TODO
         Self {
             shared: SharedState {
+                id,
                 current_term: 1,
                 voted_for: None,
                 log: LogEntries::new(),
@@ -59,10 +63,10 @@ impl Raft {
                 last_applied: 1,
             },
             role: Role::Follower,
-            inbound: RequestHandler::new(tx),
-            outbound: ,
-            quoram: members.len(),
-            members,
+            inbox: rx,
+            inbound: RequestHandler::new(tx.clone()),
+            outbound: Net::new(id, nodes.clone(), tx.clone()),
+            quoram: nodes.len(),
         }
     }
     fn resume() -> Self {
@@ -79,7 +83,7 @@ impl Raft {
                 self.shared
                     .log
                     .append(LogEntries::new(request.get_command()));
-                self.rpc_append_entries();
+                self.outbound.send_rpc(dest_peer, rpc);
             }
         }
     }
