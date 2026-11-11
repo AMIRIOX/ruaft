@@ -11,12 +11,12 @@ use tarpc::{client, context, tokio_serde::formats::Json};
 use tokio::sync::mpsc;
 
 const RECONNECT_BACKOFF: Duration = Duration::from_millis(200);
-enum OutboundRPCs {
+pub enum OutboundRPCs {
     AppendEntries(AppendEntriesRPC),
     RequestForVote(RequestForVoteRPC),
 }
 pub struct Net {
-    pub senders: HashMap<NodeId, mpsc::UnboundedSender<OutboundRPCs>>,
+    senders: HashMap<NodeId, mpsc::UnboundedSender<OutboundRPCs>>,
 }
 
 impl Net {
@@ -39,7 +39,7 @@ impl Net {
     }
     pub fn send_rpc(&self, dest_peer: NodeId, rpc: OutboundRPCs) {
         if let Some(tx) = self.senders.get(&dest_peer) {
-            tx.send(rpc);
+            let _ = tx.send(rpc); // ignore when link task dead
             todo!();
         }
     }
@@ -58,6 +58,7 @@ async fn link(
                     OutboundRPCs::AppendEntries(rpc) => {
                         let result = client.append_entries(context::current(), rpc).await;
                         if let Ok(result) = result {
+                            // TODO: resend?
                             inbox_tx
                                 .send(InboundRPCs::AppendEntriesResponse(result, dest_peer))
                                 .await;

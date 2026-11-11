@@ -1,9 +1,11 @@
 use std::net::SocketAddr;
 
-use crate::log::LogEntries;
-use crate::net::Net;
-use crate::server::RequestHandler;
-use crate::{client::ClientRequest, server::InboundRPCs};
+use crate::{
+    client::ClientRequest,
+    log::LogEntries,
+    net::Net,
+    server::{InboundRPCs, RequestHandler},
+};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
@@ -74,28 +76,30 @@ impl Raft {
         todo!();
     }
     fn on_recieved_command(&mut self, request: ClientRequest) {
-        match self.role {
+        match &mut self.role {
             Role::Follower | Role::Candidate => {
                 // redirect to known leader (otherwise just reject)
             }
             Role::Leader(state) => {
                 // TODO
+                /*
                 self.shared
                     .log
                     .append(LogEntries::new(request.get_command()));
                 self.outbound.send_rpc(dest_peer, rpc);
+                */
             }
         }
     }
 }
 
-pub enum Role {
+enum Role {
     Leader(Leader),
     Candidate,
     Follower,
 }
 
-struct Leader {
+pub struct Leader {
     // TODO
     next_index: Vec<LogIndex>,
     match_index: Vec<LogIndex>,

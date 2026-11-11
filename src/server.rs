@@ -6,7 +6,8 @@ use futures::StreamExt;
 /// RequestHandler
 use std::net::SocketAddr;
 use tarpc::context::Context;
-use tarpc::server::{BaseChannel, Channel};
+use tarpc::server::incoming::spawn_incoming;
+use tarpc::server::{BaseChannel, Channel, incoming::Incoming};
 use tarpc::tokio_serde::formats::Json;
 use tokio::sync::{mpsc, oneshot};
 
@@ -75,22 +76,19 @@ impl RequestHandler {
     }
 
     pub async fn start_listen_peer(&self, nodes: Vec<SocketAddr>) -> std::io::Result<()> {
+        let mut listeners = Vec::new();
         for addr in nodes {
             let listener = tarpc::serde_transport::tcp::listen(addr, Json::default).await?;
+            listeners.push(listener);
+        }
 
-            listener
+        let this = self.clone();
+        tokio::spawn(spawn_incoming(
+            futures::stream::select_all(listeners)
                 .filter_map(|r| async { r.ok() })
                 .map(BaseChannel::with_defaults)
-                .for_each(|channel| async move {
-                    let this = self.clone();
-                    tokio::spawn(channel.execute(RaftService::serve(this)).for_each(
-                        |call| async {
-                            tokio::spawn(call);
-                        },
-                    ));
-                })
-                .await;
-        }
+                .execute(RaftService::serve(this)),
+        ));
         Ok(())
     }
 
