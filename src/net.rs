@@ -1,6 +1,6 @@
 use crate::{
-    raft::{AppendEntriesRPC, LogIndex, NodeId, RaftResponse, RequestForVoteRPC, TermId},
-    server::{InboundRPCs, RaftService, RaftServiceClient},
+    raft::{AppendEntriesRPC, NodeId, RequestForVoteRPC},
+    server::{InboundRPCs, RaftServiceClient},
 };
 /// Outbound
 /// 每个服务器出站的消息
@@ -8,7 +8,7 @@ use crate::{
 /// link task 里的 clients
 use std::{collections::HashMap, net::SocketAddr, time::Duration};
 use tarpc::{client, context, tokio_serde::formats::Json};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 
 const RECONNECT_BACKOFF: Duration = Duration::from_millis(200);
 enum OutboundRPCs {
@@ -16,7 +16,7 @@ enum OutboundRPCs {
     RequestForVote(RequestForVoteRPC),
 }
 pub struct Net {
-    pub senders: HashMap<NodeId, mpsc::Sender<OutboundRPCs>>,
+    pub senders: HashMap<NodeId, mpsc::UnboundedSender<OutboundRPCs>>,
 }
 
 impl Net {
@@ -31,7 +31,7 @@ impl Net {
                 continue;
             }
 
-            let (tx, rx) = mpsc::channel(8); // TODO
+            let (tx, rx) = mpsc::unbounded_channel(); // TODO
             links.insert(id, tx);
             tokio::spawn(link(inbox_tx.clone(), rx, addr, id));
         }
@@ -39,14 +39,14 @@ impl Net {
     }
     pub fn send_rpc(&self, dest_peer: NodeId, rpc: OutboundRPCs) {
         if let Some(tx) = self.senders.get(&dest_peer) {
-            // TODO
+            tx.send(rpc);
             todo!();
         }
     }
 }
 async fn link(
     inbox_tx: mpsc::Sender<InboundRPCs>,
-    mut rx: mpsc::Receiver<OutboundRPCs>,
+    mut rx: mpsc::UnboundedReceiver<OutboundRPCs>,
     addr: SocketAddr,
     dest_peer: NodeId,
 ) {
