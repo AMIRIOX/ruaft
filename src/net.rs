@@ -11,6 +11,8 @@ use tarpc::{client, context, tokio_serde::formats::Json};
 use tokio::sync::mpsc;
 
 const RECONNECT_BACKOFF: Duration = Duration::from_millis(200);
+
+#[derive(Clone)]
 pub enum OutboundRPCs {
     AppendEntries(AppendEntriesRPC),
     RequestForVote(RequestForVoteRPC),
@@ -40,7 +42,6 @@ impl Net {
     pub fn send_rpc(&self, dest_peer: NodeId, rpc: OutboundRPCs) {
         if let Some(tx) = self.senders.get(&dest_peer) {
             let _ = tx.send(rpc); // ignore when link task dead
-            todo!();
         }
     }
 }

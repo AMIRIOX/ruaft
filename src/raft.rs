@@ -13,22 +13,22 @@ pub type NodeId = u64;
 pub type TermId = u64;
 pub type LogIndex = u64;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppendEntriesRPC {
-    term: TermId,
-    leader_id: NodeId,
-    prev_log_index: LogIndex,
-    prev_log_term: TermId,
-    entries: LogEntries,
-    leader_commit: LogIndex,
+    pub term: TermId,
+    pub leader_id: NodeId,
+    pub prev_log_index: LogIndex,
+    pub prev_log_term: TermId,
+    pub entries: LogEntries,
+    pub leader_commit: LogIndex,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RequestForVoteRPC {
-    term: TermId,
-    candidate_id: NodeId,
-    last_log_index: LogIndex,
-    last_log_term: TermId,
+    pub term: TermId,
+    pub candidate_id: NodeId,
+    pub last_log_index: LogIndex,
+    pub last_log_term: TermId,
 }
 
 pub type RaftResponse = (TermId, bool);

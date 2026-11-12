@@ -75,40 +75,16 @@ impl RequestHandler {
         Self { tx }
     }
 
-    pub async fn start_listen_peer(&self, nodes: Vec<SocketAddr>) -> std::io::Result<()> {
-        let mut listeners = Vec::new();
-        for addr in nodes {
-            let listener = tarpc::serde_transport::tcp::listen(addr, Json::default).await?;
-            listeners.push(listener);
-        }
+    pub async fn start_listen(&self, addr: SocketAddr) -> std::io::Result<()> {
+        let listener = tarpc::serde_transport::tcp::listen(addr, Json::default).await?;
 
         let this = self.clone();
         tokio::spawn(spawn_incoming(
-            futures::stream::select_all(listeners)
+            listener
                 .filter_map(|r| async { r.ok() })
                 .map(BaseChannel::with_defaults)
                 .execute(RaftService::serve(this)),
         ));
-        Ok(())
-    }
-
-    pub async fn start_listen_client(&self, client_addr: SocketAddr) -> std::io::Result<()> {
-        let listener = tarpc::serde_transport::tcp::listen(client_addr, Json::default).await?;
-
-        listener
-            .filter_map(|r| async { r.ok() })
-            .map(BaseChannel::with_defaults)
-            .for_each(|channel| async move {
-                let this = self.clone();
-                tokio::spawn(
-                    channel
-                        .execute(ClientService::serve(this))
-                        .for_each(|call| async {
-                            tokio::spawn(call);
-                        }),
-                );
-            })
-            .await;
         Ok(())
     }
 }
