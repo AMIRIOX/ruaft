@@ -62,16 +62,16 @@ async fn test_legal_transport() {
     node0.1.send_rpc(1, out_rpc.clone());
     node0.1.send_rpc(2, out_rpc.clone());
 
-    let rpc_node1_recieved = node1.2.recv().await.unwrap();
-    match rpc_node1_recieved {
+    let rpc_node1_received = node1.2.recv().await.unwrap();
+    match rpc_node1_received {
         InboundRPCs::AppendEntries(r, tx) => {
             assert_eq!(r, rpc.clone());
             assert!(tx.send((r.term, true)).is_ok());
         }
         _ => unreachable!(),
     }
-    let rpc_node2_recieved = node2.2.recv().await.unwrap();
-    match rpc_node2_recieved {
+    let rpc_node2_received = node2.2.recv().await.unwrap();
+    match rpc_node2_received {
         InboundRPCs::AppendEntries(r, tx) => {
             assert_eq!(r, rpc.clone());
             assert!(tx.send((r.term, true)).is_ok());
@@ -80,9 +80,9 @@ async fn test_legal_transport() {
     }
 
     // TODO: sequential dependency
-    let reply_node0_recieved_from_node1 = node0.2.recv().await.unwrap();
-    let reply_node0_recieved_from_node2 = node0.2.recv().await.unwrap();
-    match reply_node0_recieved_from_node1 {
+    let reply_node0_received_from_node1 = node0.2.recv().await.unwrap();
+    let reply_node0_received_from_node2 = node0.2.recv().await.unwrap();
+    match reply_node0_received_from_node1 {
         InboundRPCs::AppendEntriesResponse((term, success), id) => {
             assert_eq!(term, 2);
             assert!(success);
@@ -90,7 +90,7 @@ async fn test_legal_transport() {
         }
         _ => unreachable!(),
     }
-    match reply_node0_recieved_from_node2 {
+    match reply_node0_received_from_node2 {
         InboundRPCs::AppendEntriesResponse((term, success), id) => {
             assert_eq!(term, 2);
             assert!(success);

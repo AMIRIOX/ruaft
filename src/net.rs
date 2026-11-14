@@ -1,5 +1,5 @@
 use crate::{
-    raft::{AppendEntriesRPC, NodeId, RequestForVoteRPC},
+    raft::{AppendEntriesRPC, NodeId, RequestVoteRPC},
     server::{InboundRPCs, RaftServiceClient},
 };
 /// Outbound
@@ -15,7 +15,7 @@ const RECONNECT_BACKOFF: Duration = Duration::from_millis(200);
 #[derive(Clone)]
 pub enum OutboundRPCs {
     AppendEntries(AppendEntriesRPC),
-    RequestForVote(RequestForVoteRPC),
+    RequestVote(RequestVoteRPC),
 }
 pub struct Net {
     senders: HashMap<NodeId, mpsc::UnboundedSender<OutboundRPCs>>,
@@ -44,6 +44,14 @@ impl Net {
             let _ = tx.send(rpc); // ignore when link task dead
         }
     }
+    pub fn send_except(&self, exclude: NodeId, rpc: OutboundRPCs) {
+        for (id, tx) in &self.senders {
+            if *id == exclude {
+                continue;
+            }
+            let _ = tx.send(rpc.clone());
+        }
+    }
 }
 async fn link(
     inbox_tx: mpsc::Sender<InboundRPCs>,
@@ -67,11 +75,11 @@ async fn link(
                             break;
                         }
                     }
-                    OutboundRPCs::RequestForVote(rpc) => {
-                        let result = client.request_for_vote(context::current(), rpc).await;
+                    OutboundRPCs::RequestVote(rpc) => {
+                        let result = client.request_vote(context::current(), rpc).await;
                         if let Ok(result) = result {
                             inbox_tx
-                                .send(InboundRPCs::RequestForVoteResponse(result, dest_peer))
+                                .send(InboundRPCs::RequestVoteResponse(result, dest_peer))
                                 .await;
                         } else {
                             break;

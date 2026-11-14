@@ -1,5 +1,5 @@
 use crate::client::ClientRequest;
-use crate::raft::{AppendEntriesRPC, NodeId, RaftResponse, RequestForVoteRPC, TermId};
+use crate::raft::{AppendEntriesRPC, NodeId, RaftResponse, RequestVoteRPC, TermId};
 use futures::StreamExt;
 /// Inbound
 /// 每个服务器入站的消息
@@ -7,7 +7,7 @@ use futures::StreamExt;
 use std::net::SocketAddr;
 use tarpc::context::Context;
 use tarpc::server::incoming::spawn_incoming;
-use tarpc::server::{BaseChannel, Channel, incoming::Incoming};
+use tarpc::server::{BaseChannel, incoming::Incoming};
 use tarpc::tokio_serde::formats::Json;
 use tokio::sync::{mpsc, oneshot};
 
@@ -19,9 +19,9 @@ pub trait ClientService {
 
 pub enum InboundRPCs {
     AppendEntries(AppendEntriesRPC, oneshot::Sender<RaftResponse>),
-    RequestForVote(RequestForVoteRPC, oneshot::Sender<RaftResponse>),
+    RequestVote(RequestVoteRPC, oneshot::Sender<RaftResponse>),
     AppendEntriesResponse(RaftResponse, NodeId),
-    RequestForVoteResponse(RaftResponse, NodeId),
+    RequestVoteResponse(RaftResponse, NodeId),
     ClientRequest(ClientRequest),
 }
 
@@ -40,7 +40,7 @@ impl ClientService for RequestHandler {
 pub trait RaftService {
     // TODO
     async fn append_entries(rpc: AppendEntriesRPC) -> (TermId, bool);
-    async fn request_for_vote(rpc: RequestForVoteRPC) -> (TermId, bool);
+    async fn request_vote(rpc: RequestVoteRPC) -> (TermId, bool);
 }
 
 impl RaftService for RequestHandler {
@@ -56,15 +56,13 @@ impl RaftService for RequestHandler {
         // SAFETY: not safe
         reply_rx.await.unwrap()
     }
-    async fn request_for_vote(
+    async fn request_vote(
         self,
         _context: tarpc::context::Context,
-        rpc: RequestForVoteRPC,
+        rpc: RequestVoteRPC,
     ) -> (TermId, bool) {
         let (reply_tx, reply_rx) = oneshot::channel();
-        self.tx
-            .send(InboundRPCs::RequestForVote(rpc, reply_tx))
-            .await;
+        self.tx.send(InboundRPCs::RequestVote(rpc, reply_tx)).await;
         // SAFETY: not safe
         reply_rx.await.unwrap()
     }
