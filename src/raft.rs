@@ -7,7 +7,7 @@ use crate::{
     server::{InboundRPCs, RequestHandler},
 };
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 pub type NodeId = u64;
 pub type TermId = u64;
@@ -78,18 +78,13 @@ impl Raft {
     async fn poll(&mut self) {
         while let Some(recv) = self.inbox.recv().await {
             match recv {
-                InboundRPCs::AppendEntries(r, tx) => {
-                    self.shared.log.append(r.entries);
+                InboundRPCs::AppendEntries(rpc, tx) => self.handle_append_entries(rpc, tx),
+                InboundRPCs::RequestVote(rpc, tx) => self.handle_request_vote(rpc, tx),
+                InboundRPCs::AppendEntriesResponse(response, source_peer) => {
+                    self.handle_append_entries_response(response, source_peer)
                 }
-                InboundRPCs::RequestVote(r, tx) => {
-                    todo!();
-                }
-                InboundRPCs::AppendEntriesResponse((term, success), source_peer) => {
-                    todo!();
-                }
-
-                InboundRPCs::RequestVoteResponse((term, success), source_peer) => {
-                    todo!();
+                InboundRPCs::RequestVoteResponse(response, source_peer) => {
+                    self.handle_request_vote_response(response, source_peer);
                 }
                 InboundRPCs::ClientRequest(request) => {
                     self.on_received_command(request);
@@ -104,28 +99,47 @@ impl Raft {
                 // redirect to known leader (otherwise just reject)
             }
             Role::Leader(state) => {
-                self.shared.log.append(LogEntries::from_single(
-                    request.get_command(),
-                    self.shared.current_term,
-                ));
+                let prev_log_index = self.shared.log.current_log_index();
+                let prev_log_term = self.shared.log.current_log_term().unwrap_or(0);
+                let entries =
+                    LogEntries::from_single(request.get_command(), self.shared.current_term);
+                self.shared.log.append(entries.clone());
                 self.outbound.send_except(
                     self.shared.id,
                     OutboundRPCs::AppendEntries(AppendEntriesRPC {
                         term: self.shared.current_term,
                         leader_id: self.shared.id,
-                        prev_log_index: todo!(),
-                        prev_log_term: todo!(),
-                        entries: todo!(),
+                        prev_log_index,
+                        prev_log_term,
+                        entries: entries,
                         leader_commit: self.shared.commit_index,
                     }),
                 );
             }
         }
     }
-    fn append_entries(&mut self) {
+    fn handle_append_entries(
+        &mut self,
+        rpc: AppendEntriesRPC,
+        reply_tx: oneshot::Sender<RaftResponse>,
+    ) {
+        if rpc.term < self.shared.current_term {
+            // TODO: result?
+            let _ = reply_tx.send((self.shared.current_term, false));
+        }
+        self.shared.log.append(rpc.entries);
+    }
+    fn handle_request_vote(
+        &mut self,
+        rpc: RequestVoteRPC,
+        reply_tx: oneshot::Sender<RaftResponse>,
+    ) {
         todo!();
     }
-    fn request_vote(&mut self) {
+    fn handle_append_entries_response(&self, response: RaftResponse, source: NodeId) {
+        todo!();
+    }
+    fn handle_request_vote_response(&self, response: RaftResponse, source: NodeId) {
         todo!();
     }
 }

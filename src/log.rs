@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use crate::client::Command;
 use crate::raft::TermId;
+use crate::{client::Command, raft::LogIndex};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -54,5 +54,19 @@ impl Log {
     }
     pub fn append(&mut self, entries: LogEntries) {
         self.logs.append_other(entries);
+    }
+    pub fn get(&self, index: LogIndex) -> Option<&LogEntry> {
+        self.logs.log.get((index - 1) as usize)
+    }
+    pub fn current_log_index(&self) -> LogIndex {
+        self.logs.log.len() as LogIndex
+    }
+    pub fn current_log_term(&self) -> Option<TermId> {
+        self.logs.log.last().map(|e| e.term_on_recieve)
+    }
+    pub fn match_tail(&self) -> Option<LogEntry> {
+        // return the last entry that matches (term, index)
+        // what if there are newer logs following the matched log?
+        todo!();
     }
 }
