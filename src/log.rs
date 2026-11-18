@@ -1,13 +1,13 @@
-use std::path::Path;
-
 use crate::raft::TermId;
 use crate::{client::Command, raft::LogIndex};
 use serde::{Deserialize, Serialize};
+use std::ops::Range;
+use std::path::Path;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct LogEntry {
-    command: Command,
-    term_on_recieve: TermId,
+pub struct LogEntry {
+    pub command: Command,
+    pub term_on_receive: TermId,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -18,18 +18,24 @@ impl LogEntries {
     pub fn new() -> Self {
         Self { log: Vec::new() }
     }
-    pub fn from_single(command: Command, term_on_recieve: TermId) -> Self {
+    pub fn from_single(command: Command, term_on_receive: TermId) -> Self {
         let entry = LogEntry {
             command,
-            term_on_recieve,
+            term_on_receive,
         };
         Self { log: vec![entry] }
+    }
+    pub fn from_vec(drain: Vec<LogEntry>) -> Self {
+        Self { log: drain }
     }
     pub fn append(&mut self, entry: LogEntry) {
         self.log.push(entry);
     }
     pub fn append_other(&mut self, mut other: Self) {
         self.log.append(&mut other.log);
+    }
+    pub fn slice(&self, start: usize, end: usize) -> LogEntries {
+        LogEntries::from_vec(self.log[start - 1..end].to_vec())
     }
 }
 
@@ -55,29 +61,29 @@ impl Log {
     pub fn append(&mut self, entries: LogEntries) {
         self.logs.append_other(entries);
     }
-    pub fn get(&self, index: LogIndex) -> Option<&LogEntry> {
-        self.logs.log.get((index - 1) as usize)
+    pub fn get(&self, index: LogIndex) -> &LogEntry {
+        debug_assert!(index <= self.current_log_index());
+        &self.logs.log[index - 1]
+    }
+    pub fn term_at(&self, index: LogIndex) -> TermId {
+        if index == 0 {
+            0 // index = prev_log_index
+        } else {
+            self.get(index).term_on_receive
+        }
     }
     pub fn current_log_index(&self) -> LogIndex {
         self.logs.log.len() as LogIndex
     }
     pub fn current_log_term(&self) -> Option<TermId> {
-        self.logs.log.last().map(|e| e.term_on_recieve)
-    }
-    pub fn match_tail(&self, term: TermId, index: LogIndex) -> Option<LogIndex> {
-        // return the last entry that matches (term, index)
-        // what if there are newer logs following the matched log?
-        self.logs
-            .log
-            .iter()
-            .enumerate()
-            .rev()
-            .find(|&(idx, log)| log.term_on_recieve == term && idx + 1 == index)
-            .map(|(idx, _)| idx)
+        self.logs.log.last().map(|e| e.term_on_receive)
     }
     pub fn truncate(&mut self, till: LogIndex) {
         // truncate logs [till + 1, end)
         self.logs.log.truncate(till);
-        todo!();
+    }
+
+    pub fn slice(&self, index: Range<usize>) -> LogEntries {
+        self.logs.slice(index.start, index.end)
     }
 }
