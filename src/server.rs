@@ -1,5 +1,7 @@
 use crate::client::ClientRequest;
-use crate::raft::{AppendEntriesRPC, NodeId, RaftResponse, RequestVoteRPC, TermId};
+use crate::raft::{
+    AppendEntriesRPC, AppendEntriesResponse, NodeId, RequestVoteRPC, RequestVoteResponse, TermId,
+};
 use futures::StreamExt;
 /// Inbound
 /// 每个服务器入站的消息
@@ -18,10 +20,10 @@ pub trait ClientService {
 }
 
 pub enum InboundRPCs {
-    AppendEntries(AppendEntriesRPC, oneshot::Sender<RaftResponse>),
-    RequestVote(RequestVoteRPC, oneshot::Sender<RaftResponse>),
-    AppendEntriesResponse(RaftResponse, NodeId),
-    RequestVoteResponse(RaftResponse, NodeId),
+    AppendEntries(AppendEntriesRPC, oneshot::Sender<AppendEntriesResponse>),
+    RequestVote(RequestVoteRPC, oneshot::Sender<RequestVoteResponse>),
+    AppendEntriesResponse(AppendEntriesResponse),
+    RequestVoteResponse(RequestVoteResponse),
     ClientRequest(ClientRequest),
 }
 
@@ -39,8 +41,8 @@ impl ClientService for RequestHandler {
 #[tarpc::service]
 pub trait RaftService {
     // TODO
-    async fn append_entries(rpc: AppendEntriesRPC) -> (TermId, bool);
-    async fn request_vote(rpc: RequestVoteRPC) -> (TermId, bool);
+    async fn append_entries(rpc: AppendEntriesRPC) -> AppendEntriesResponse;
+    async fn request_vote(rpc: RequestVoteRPC) -> RequestVoteResponse;
 }
 
 impl RaftService for RequestHandler {
@@ -48,7 +50,7 @@ impl RaftService for RequestHandler {
         self,
         _context: tarpc::context::Context,
         rpc: AppendEntriesRPC,
-    ) -> (TermId, bool) {
+    ) -> AppendEntriesResponse {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
             .send(InboundRPCs::AppendEntries(rpc, reply_tx))
@@ -60,7 +62,7 @@ impl RaftService for RequestHandler {
         self,
         _context: tarpc::context::Context,
         rpc: RequestVoteRPC,
-    ) -> (TermId, bool) {
+    ) -> RequestVoteResponse {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx.send(InboundRPCs::RequestVote(rpc, reply_tx)).await;
         // SAFETY: not safe

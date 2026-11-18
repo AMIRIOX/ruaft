@@ -1,5 +1,5 @@
 use crate::{
-    raft::{AppendEntriesRPC, NodeId, RequestVoteRPC},
+    raft::{AppendEntriesRPC, AppendEntriesResponse, NodeId, RequestVoteRPC},
     server::{InboundRPCs, RaftServiceClient},
 };
 /// Outbound
@@ -69,7 +69,7 @@ async fn link(
                         if let Ok(result) = result {
                             // TODO: resend?
                             inbox_tx
-                                .send(InboundRPCs::AppendEntriesResponse(result, dest_peer))
+                                .send(InboundRPCs::AppendEntriesResponse(result))
                                 .await;
                         } else {
                             break;
@@ -79,7 +79,7 @@ async fn link(
                         let result = client.request_vote(context::current(), rpc).await;
                         if let Ok(result) = result {
                             inbox_tx
-                                .send(InboundRPCs::RequestVoteResponse(result, dest_peer))
+                                .send(InboundRPCs::RequestVoteResponse(result))
                                 .await;
                         } else {
                             break;

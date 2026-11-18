@@ -1,4 +1,4 @@
-use std::net::SocketAddr;
+use std::{net::SocketAddr, time::Duration};
 
 use crate::{
     client::ClientRequest,
@@ -6,12 +6,16 @@ use crate::{
     net::{Net, OutboundRPCs},
     server::{InboundRPCs, RequestHandler},
 };
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, oneshot};
+use tokio::{
+    sync::{mpsc, oneshot},
+    time::Instant,
+};
 
-pub type NodeId = u64;
+pub type NodeId = usize;
 pub type TermId = u64;
-pub type LogIndex = u64;
+pub type LogIndex = usize;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppendEntriesRPC {
@@ -31,7 +35,21 @@ pub struct RequestVoteRPC {
     pub last_log_term: TermId,
 }
 
-pub type RaftResponse = (TermId, bool);
+// pub type RaftResponse = (TermId, bool);
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AppendEntriesResponse {
+    pub term: TermId,
+    pub matches: Option<LogIndex>,
+    pub source_peer: NodeId,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RequestVoteResponse {
+    pub term: TermId,
+    pub success: bool,
+    pub source_peer: NodeId,
+}
 
 struct SharedState {
     // Persistent
@@ -50,9 +68,16 @@ pub struct Raft {
     inbound: RequestHandler,
     outbound: Net,
     quorum: usize,
+    total: usize,
 }
 
+const HEARTBEAT: Duration = Duration::from_secs(6);
+const RATE: u32 = 5;
 impl Raft {
+    fn generate_random_timeout() -> Duration {
+        rand::rng().random_range(HEARTBEAT..=RATE * HEARTBEAT)
+    }
+
     fn new(id: NodeId, nodes: Vec<(NodeId, SocketAddr)>) -> Self {
         let (tx, rx) = mpsc::channel(8); // TODO
         Self {
@@ -64,37 +89,82 @@ impl Raft {
                 commit_index: 0,
                 last_applied: 1,
             },
-            role: Role::Follower,
+            role: Role::Follower(Follower {
+                last_heartbeat: Instant::now(),
+                heartbeat_timeout: Raft::generate_random_timeout(),
+            }),
             inbox: rx,
             inbound: RequestHandler::new(tx.clone()),
             outbound: Net::new(id, nodes.clone(), tx.clone()),
-            quorum: nodes.len(),
+            quorum: nodes.len() / 2 + 1,
+            total: nodes.len(),
         }
     }
     fn resume() -> Self {
         // read
         todo!();
     }
+    async fn apply(&mut self) {
+        if self.shared.commit_index > self.shared.last_applied {
+            // TODO: apply to state machine
+            self.shared.last_applied = self.shared.commit_index;
+        }
+        todo!();
+    }
     async fn poll(&mut self) {
-        while let Some(recv) = self.inbox.recv().await {
-            match recv {
-                InboundRPCs::AppendEntries(rpc, tx) => self.handle_append_entries(rpc, tx),
-                InboundRPCs::RequestVote(rpc, tx) => self.handle_request_vote(rpc, tx),
-                InboundRPCs::AppendEntriesResponse(response, source_peer) => {
-                    self.handle_append_entries_response(response, source_peer)
+        let mut ticker = tokio::time::interval_at(Instant::now() + HEARTBEAT, HEARTBEAT);
+        tokio::select! {
+            Some(recv) = self.inbox.recv() => {
+                match recv {
+                    InboundRPCs::AppendEntries(rpc, tx) => self.handle_append_entries(rpc, tx),
+                    InboundRPCs::RequestVote(rpc, tx) => self.handle_request_vote(rpc, tx),
+                    InboundRPCs::AppendEntriesResponse(resp) => {
+                        self.handle_append_entries_response(resp)
+                    }
+                    InboundRPCs::RequestVoteResponse(resp) => {
+                        self.handle_request_vote_response(resp);
+                    }
+                    InboundRPCs::ClientRequest(request) => {
+                        self.on_received_command(request);
+                    }
                 }
-                InboundRPCs::RequestVoteResponse(response, source_peer) => {
-                    self.handle_request_vote_response(response, source_peer);
+            },
+            _ = ticker.tick() => self.on_tick(),
+        }
+    }
+    fn on_tick(&mut self) {
+        match &mut self.role {
+            Role::Leader(_) => self.outbound.send_except(
+                self.shared.id,
+                OutboundRPCs::AppendEntries(AppendEntriesRPC {
+                    term: self.shared.current_term,
+                    leader_id: self.shared.id,
+                    prev_log_index: self.shared.log.current_log_index(),
+                    prev_log_term: self.shared.log.current_log_term().unwrap_or(0),
+                    entries: LogEntries::new(),
+                    leader_commit: self.shared.commit_index,
+                }),
+            ),
+            Role::Follower(follower) => {
+                if Instant::now() - follower.last_heartbeat > follower.heartbeat_timeout {
+                    // start election, become candidate
+                    todo!();
                 }
-                InboundRPCs::ClientRequest(request) => {
-                    self.on_received_command(request);
-                }
+                follower.last_heartbeat = Instant::now();
             }
+            Role::Candidate(candidate) => {
+                if Instant::now() > candidate.election_deadline {
+                    // start new election, become candidate again
+                    todo!();
+                }
+                todo!();
+            }
+            _ => {}
         }
     }
     fn on_received_command(&mut self, request: ClientRequest) {
         match &mut self.role {
-            Role::Follower | Role::Candidate => {
+            Role::Follower(_) | Role::Candidate(_) => {
                 todo!();
                 // redirect to known leader (otherwise just reject)
             }
@@ -118,40 +188,159 @@ impl Raft {
             }
         }
     }
+    fn follow_if_newer(&mut self, term: TermId) {
+        // TODO: ugly
+        if term > self.shared.current_term && !matches!(self.role, Role::Follower(_)) {
+            self.shared.current_term = term;
+            self.role = Role::Follower(Follower {
+                last_heartbeat: Instant::now(),
+                heartbeat_timeout: Raft::generate_random_timeout(),
+            });
+        }
+    }
     fn handle_append_entries(
         &mut self,
         rpc: AppendEntriesRPC,
-        reply_tx: oneshot::Sender<RaftResponse>,
+        reply_tx: oneshot::Sender<AppendEntriesResponse>,
     ) {
+        self.follow_if_newer(rpc.term);
         if rpc.term < self.shared.current_term {
             // TODO: result?
-            let _ = reply_tx.send((self.shared.current_term, false));
+            let _ = reply_tx.send(AppendEntriesResponse {
+                term: self.shared.current_term,
+                matches: None,
+                source_peer: self.shared.id,
+            });
+            return;
         }
+
+        if let Some(matched) = self
+            .shared
+            .log
+            .match_tail(rpc.prev_log_term, rpc.prev_log_index)
+        {
+            self.shared.log.truncate(matched);
+        } else {
+            let _ = reply_tx.send(AppendEntriesResponse {
+                term: self.shared.current_term,
+                matches: None,
+                source_peer: self.shared.id,
+            });
+
+            return;
+        }
+
+        // append all new entries which don't exist in self.log
         self.shared.log.append(rpc.entries);
+
+        if rpc.leader_commit > self.shared.commit_index {
+            self.shared.commit_index = rpc.leader_commit.min(self.shared.log.current_log_index());
+        }
+
+        let _ = reply_tx.send(AppendEntriesResponse {
+            term: self.shared.current_term,
+            matches: Some(self.shared.log.current_log_index()),
+            source_peer: self.shared.id,
+        });
     }
     fn handle_request_vote(
         &mut self,
         rpc: RequestVoteRPC,
-        reply_tx: oneshot::Sender<RaftResponse>,
+        reply_tx: oneshot::Sender<RequestVoteResponse>,
     ) {
+        self.follow_if_newer(rpc.term);
+        if rpc.term >= self.shared.current_term
+            && self.shared.voted_for.is_none_or(|v| v == rpc.candidate_id)
+        {
+            let last_term = self.shared.log.current_log_term().unwrap_or(0);
+            let last_index = self.shared.log.current_log_index();
+            if rpc.last_log_term > last_term
+                || last_term == rpc.last_log_term && rpc.last_log_index >= last_index
+            {
+                // TODO: result?
+                let _ = reply_tx.send(RequestVoteResponse {
+                    term: self.shared.current_term,
+                    success: true,
+                    source_peer: self.shared.id,
+                });
+
+                return;
+            }
+        }
+
+        // TODO: result?
+        let _ = reply_tx.send(RequestVoteResponse {
+            term: self.shared.current_term,
+            success: false,
+            source_peer: self.shared.id,
+        });
+    }
+    fn handle_append_entries_response(&mut self, resp: AppendEntriesResponse) {
+        match &mut self.role {
+            Role::Leader(leader) => {
+                if let Some(matches) = resp.matches {
+                    leader.match_index[resp.source_peer] = matches;
+                }
+            }
+            _ => (),
+        }
+    }
+    fn handle_request_vote_response(&self, resp: RequestVoteResponse) {
         todo!();
     }
-    fn handle_append_entries_response(&self, response: RaftResponse, source: NodeId) {
-        todo!();
+
+    fn become_follower(&mut self, term: TermId) {
+        self.role = Role::Follower(Follower {
+            last_heartbeat: Instant::now(),
+            heartbeat_timeout: Raft::generate_random_timeout(),
+        });
+        self.shared.current_term = term;
+        self.shared.voted_for = None;
     }
-    fn handle_request_vote_response(&self, response: RaftResponse, source: NodeId) {
-        todo!();
+
+    fn become_leader(&mut self) {
+        self.role = Role::Leader(Leader {
+            next_index: Vec::from_fn(self.total, |_| self.shared.log.current_log_index() + 1),
+            match_index: Vec::from_fn(self.total, |_| 0),
+        });
+        self.shared.voted_for = None;
+    }
+
+    fn become_candidate(&mut self) {
+        self.role = Role::Candidate(Candidate {
+            election_deadline: Instant::now() + Raft::generate_random_timeout(),
+        });
+        self.shared.current_term += 1;
+        // TODO: vote for itself
+        self.outbound.send_except(
+            self.shared.id,
+            OutboundRPCs::RequestVote(RequestVoteRPC {
+                term: self.shared.current_term,
+                candidate_id: self.shared.id,
+                last_log_index: self.shared.log.current_log_index(),
+                last_log_term: self.shared.log.current_log_term().unwrap_or(0),
+            }),
+        );
     }
 }
 
 enum Role {
     Leader(Leader),
-    Candidate,
-    Follower,
+    Candidate(Candidate),
+    Follower(Follower),
 }
 
 pub struct Leader {
-    // TODO
     next_index: Vec<LogIndex>,
     match_index: Vec<LogIndex>,
+}
+
+pub struct Candidate {
+    election_deadline: Instant,
+    // TODO: votes:
+}
+
+pub struct Follower {
+    last_heartbeat: Instant,
+    heartbeat_timeout: Duration,
 }

@@ -8,3 +8,4 @@ serde = "1.0.229"
 tarpc = { version = "0.38.0", features = ["tokio1", "serde-transport-json", "tcp"]}
 tokio = { version = "1.54.1", features = [ "macros", "rt"]}
 futures = "0.3"
+rand = "0.10.4"

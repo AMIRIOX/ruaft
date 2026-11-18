@@ -4,6 +4,7 @@ use std::net::SocketAddr;
 use crate::log::LogEntries;
 use crate::net;
 use crate::raft;
+use crate::raft::AppendEntriesResponse;
 use crate::server;
 use crate::server::InboundRPCs;
 use tokio::sync::mpsc;
@@ -66,7 +67,14 @@ async fn test_legal_transport() {
     match rpc_node1_received {
         InboundRPCs::AppendEntries(r, tx) => {
             assert_eq!(r, rpc.clone());
-            assert!(tx.send((r.term, true)).is_ok());
+            assert!(
+                tx.send(AppendEntriesResponse {
+                    term: r.term,
+                    matches: Some(42),
+                    source_peer: 1
+                })
+                .is_ok()
+            );
         }
         _ => unreachable!(),
     }
@@ -74,7 +82,14 @@ async fn test_legal_transport() {
     match rpc_node2_received {
         InboundRPCs::AppendEntries(r, tx) => {
             assert_eq!(r, rpc.clone());
-            assert!(tx.send((r.term, true)).is_ok());
+            assert!(
+                tx.send(AppendEntriesResponse {
+                    term: r.term,
+                    matches: Some(42),
+                    source_peer: 2
+                })
+                .is_ok()
+            );
         }
         _ => unreachable!(),
     }
@@ -83,18 +98,18 @@ async fn test_legal_transport() {
     let reply_node0_received_from_node1 = node0.2.recv().await.unwrap();
     let reply_node0_received_from_node2 = node0.2.recv().await.unwrap();
     match reply_node0_received_from_node1 {
-        InboundRPCs::AppendEntriesResponse((term, success), id) => {
-            assert_eq!(term, 2);
-            assert!(success);
-            assert_eq!(id, 1);
+        InboundRPCs::AppendEntriesResponse(resp) => {
+            assert_eq!(resp.term, 2);
+            assert!(resp.matches.is_some());
+            assert_eq!(resp.source_peer, 1);
         }
         _ => unreachable!(),
     }
     match reply_node0_received_from_node2 {
-        InboundRPCs::AppendEntriesResponse((term, success), id) => {
-            assert_eq!(term, 2);
-            assert!(success);
-            assert_eq!(id, 2);
+        InboundRPCs::AppendEntriesResponse(resp) => {
+            assert_eq!(resp.term, 2);
+            assert!(resp.matches.is_some());
+            assert_eq!(resp.source_peer, 2);
         }
         _ => unreachable!(),
     }

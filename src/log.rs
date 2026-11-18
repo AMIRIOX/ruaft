@@ -64,9 +64,20 @@ impl Log {
     pub fn current_log_term(&self) -> Option<TermId> {
         self.logs.log.last().map(|e| e.term_on_recieve)
     }
-    pub fn match_tail(&self) -> Option<LogEntry> {
+    pub fn match_tail(&self, term: TermId, index: LogIndex) -> Option<LogIndex> {
         // return the last entry that matches (term, index)
         // what if there are newer logs following the matched log?
+        self.logs
+            .log
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|&(idx, log)| log.term_on_recieve == term && idx + 1 == index)
+            .map(|(idx, _)| idx)
+    }
+    pub fn truncate(&mut self, till: LogIndex) {
+        // truncate logs [till + 1, end)
+        self.logs.log.truncate(till);
         todo!();
     }
 }
