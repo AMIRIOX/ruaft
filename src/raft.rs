@@ -262,9 +262,13 @@ impl Raft {
                 || last_term == rpc.last_log_term && rpc.last_log_index >= last_index
             {
                 self.shared.voted_for = Some(rpc.candidate_id);
-                if let Role::Candidate(candidate) = &mut self.role {
-                    // TODO: useful actually?
-                    candidate.election_deadline = Instant::now() + Raft::generate_random_timeout();
+                match &mut self.role {
+                    Role::Candidate(candidate) => {
+                        candidate.election_deadline =
+                            Instant::now() + Raft::generate_random_timeout()
+                    }
+                    Role::Follower(follower) => follower.last_heartbeat = Instant::now(),
+                    _ => panic!("[FATAL] leader will never grant votes for candidates!"),
                 }
                 // TODO: result?
                 let _ = reply_tx.send(RequestVoteResponse {
@@ -336,6 +340,10 @@ impl Raft {
     }
     fn handle_request_vote_response(&mut self, resp: RequestVoteResponse) {
         self.follow_if_newer(resp.term);
+        if resp.term < self.shared.current_term {
+            return;
+        }
+
         if let Role::Candidate(candidate) = &mut self.role {
             candidate
                 .votes
@@ -371,7 +379,7 @@ impl Raft {
     fn become_candidate(&mut self) {
         self.role = Role::Candidate(Candidate {
             election_deadline: Instant::now() + Raft::generate_random_timeout(),
-            votes: (1..=self.total).map(|i| (i, None)).collect(),
+            votes: (0..self.total).map(|i| (i, None)).collect(),
         });
     }
 
